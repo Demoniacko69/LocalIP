@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IP Scanner Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="header">
+        <h1>IP Scanner Dashboard</h1>
+        <p id="summary">Online: 0 / Total: 0</p>
+      </header>
+
+      <section class="controls card">
+        <div class="field full">
+          <label for="ipRange">Rango IP (CIDR o inicio-fin)</label>
+          <input id="ipRange" type="text" placeholder="192.168.1.0/24 o 192.168.1.1-192.168.1.254" />
+        </div>
+
+        <div class="field">
+          <label for="scanInterval">Intervalo auto-scan</label>
+          <select id="scanInterval">
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+            <option value="300">5 min</option>
+          </select>
+        </div>
+
+        <div class="field toggle-wrap">
+          <label for="autoScanEnabled">Auto-scan</label>
+          <input id="autoScanEnabled" type="checkbox" />
+        </div>
+
+        <div class="field">
+          <label for="search">Buscar (IP/Hostname/Nombre manual)</label>
+          <input id="search" type="text" placeholder="Filtrar..." />
+        </div>
+
+        <div class="actions">
+          <button id="saveConfigBtn" class="btn secondary">Guardar configuración</button>
+          <button id="scanNowBtn" class="btn primary">Escanear ahora</button>
+        </div>
+      </section>
+
+      <section class="table-wrap card">
+        <table>
+          <thead>
+            <tr>
+              <th>Hostname/Nombre</th>
+              <th>Nombre manual</th>
+              <th>IP</th>
+              <th>Estado</th>
+              <th>Latencia (ms)</th>
+              <th>Último escaneo</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
