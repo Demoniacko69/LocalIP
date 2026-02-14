@@ -183,7 +183,11 @@ async def ping_host(ip: str, timeout_ms: int) -> float | None:
     try:
         await asyncio.wait_for(process.wait(), timeout=timeout_s + 0.5)
     except asyncio.TimeoutError:
-        process.kill()
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        await process.wait()
         return None
 
     elapsed = (time.perf_counter() - start) * 1000
@@ -219,11 +223,18 @@ async def resolve_hostname(ip: str) -> str:
 
 async def scan_ip(ip: str, semaphore: asyncio.Semaphore, timeout_ms: int) -> ScanResult:
     async with semaphore:
-        latency = await ping_host(ip, timeout_ms)
-        if latency is None:
-            latency = await tcp_probe(ip, timeout_ms)
-        status = "Online" if latency is not None else "Offline"
-        hostname = await resolve_hostname(ip) if status == "Online" else ""
+        try:
+            latency = await ping_host(ip, timeout_ms)
+            if latency is None:
+                latency = await tcp_probe(ip, timeout_ms)
+            status = "Online" if latency is not None else "Offline"
+            hostname = await resolve_hostname(ip) if status == "Online" else ""
+        except Exception as exc:
+            logger.warning("Scan failed for %s: %s", ip, exc)
+            latency = None
+            status = "Offline"
+            hostname = ""
+
         return ScanResult(
             hostname=hostname,
             ip=ip,
