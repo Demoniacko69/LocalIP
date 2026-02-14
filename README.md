@@ -14,6 +14,7 @@ Dashboard web con tema oscuro para escanear rangos de IP en LAN, visualizar esta
 - Persistencia en volumen Docker (`/data/config.json` y `/data/results.json`).
 - Auto-scan opcional y botón “Escanear ahora”.
 - Filtro por IP/hostname.
+- Actualización en tiempo real por IP durante el escaneo (progreso incremental en tabla y contador).
 
 ## Estructura
 

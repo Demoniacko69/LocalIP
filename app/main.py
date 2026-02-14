@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import ipaddress
 import json
 import logging
@@ -55,6 +56,8 @@ class ResultsPayload(BaseModel):
     online: int
     offline: int
     total: int
+    completed: int
+    scanning: bool
     items: list[ScanResult]
 
 
@@ -103,6 +106,19 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def empty_results_payload() -> ResultsPayload:
+    return ResultsPayload(
+        scanned_at="",
+        duration_ms=0,
+        online=0,
+        offline=0,
+        total=0,
+        completed=0,
+        scanning=False,
+        items=[],
+    )
+
+
 def load_config() -> ConfigModel:
     ensure_data_dir()
     payload = read_json(
@@ -127,15 +143,9 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 config_lock = asyncio.Lock()
 scan_lock = asyncio.Lock()
+results_lock = asyncio.Lock()
 config_state = load_config()
-results_state: ResultsPayload = ResultsPayload(
-    scanned_at="",
-    duration_ms=0,
-    online=0,
-    offline=0,
-    total=0,
-    items=[],
-)
+results_state: ResultsPayload = empty_results_payload()
 
 
 def load_results() -> ResultsPayload:
@@ -148,19 +158,30 @@ def load_results() -> ResultsPayload:
             "online": 0,
             "offline": 0,
             "total": 0,
+            "completed": 0,
+            "scanning": False,
             "items": [],
         },
     )
+    payload.setdefault("completed", len(payload.get("items", [])))
+    payload.setdefault("scanning", False)
     try:
         return ResultsPayload(**payload)
     except Exception:
         logger.warning("Results file invalid, resetting")
-        empty = ResultsPayload(scanned_at="", duration_ms=0, online=0, offline=0, total=0, items=[])
+        empty = empty_results_payload()
         write_json(RESULTS_PATH, empty.model_dump())
         return empty
 
 
 results_state = load_results()
+
+
+async def update_results_state(payload: ResultsPayload) -> None:
+    global results_state
+    async with results_lock:
+        results_state = payload
+        write_json(RESULTS_PATH, payload.model_dump())
 
 
 async def ping_host(ip: str, timeout_ms: int) -> float | None:
@@ -183,11 +204,14 @@ async def ping_host(ip: str, timeout_ms: int) -> float | None:
     try:
         await asyncio.wait_for(process.wait(), timeout=timeout_s + 0.5)
     except asyncio.TimeoutError:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        await process.wait()
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+        with contextlib.suppress(Exception):
+            await process.wait()
+        return None
+    except Exception as exc:
+        logger.warning("Ping failed for %s: %s", ip, exc)
         return None
 
     elapsed = (time.perf_counter() - start) * 1000
@@ -244,6 +268,11 @@ async def scan_ip(ip: str, semaphore: asyncio.Semaphore, timeout_ms: int) -> Sca
         )
 
 
+async def scan_ip_indexed(idx: int, ip: str, semaphore: asyncio.Semaphore, timeout_ms: int) -> tuple[int, ScanResult]:
+    result = await scan_ip(ip, semaphore, timeout_ms)
+    return idx, result
+
+
 async def run_scan() -> ResultsPayload:
     async with scan_lock:
         start = time.perf_counter()
@@ -251,27 +280,66 @@ async def run_scan() -> ResultsPayload:
         ips = parse_ip_range(cfg.ip_range)
         timeout_ms = max(50, DEFAULT_TIMEOUT_MS)
         semaphore = asyncio.Semaphore(max(1, DEFAULT_CONCURRENCY))
-        tasks = [scan_ip(ip, semaphore, timeout_ms) for ip in ips]
-        items = await asyncio.gather(*tasks)
-        online = sum(1 for item in items if item.status == "Online")
-        offline = len(items) - online
-        payload = ResultsPayload(
+
+        initial = ResultsPayload(
+            scanned_at="",
+            duration_ms=0,
+            online=0,
+            offline=0,
+            total=len(ips),
+            completed=0,
+            scanning=True,
+            items=[],
+        )
+        await update_results_state(initial)
+
+        tasks = [
+            asyncio.create_task(scan_ip_indexed(idx, ip, semaphore, timeout_ms))
+            for idx, ip in enumerate(ips)
+        ]
+        ordered_items: list[ScanResult | None] = [None] * len(ips)
+        online = 0
+        completed = 0
+
+        for task in asyncio.as_completed(tasks):
+            idx, item = await task
+            ordered_items[idx] = item
+            completed += 1
+            if item.status == "Online":
+                online += 1
+
+            partial_items = [entry for entry in ordered_items if entry is not None]
+            partial = ResultsPayload(
+                scanned_at="",
+                duration_ms=int((time.perf_counter() - start) * 1000),
+                online=online,
+                offline=completed - online,
+                total=len(ips),
+                completed=completed,
+                scanning=True,
+                items=partial_items,
+            )
+            await update_results_state(partial)
+
+        final_payload = ResultsPayload(
             scanned_at=datetime.now(timezone.utc).isoformat(),
             duration_ms=int((time.perf_counter() - start) * 1000),
             online=online,
-            offline=offline,
-            total=len(items),
-            items=items,
+            offline=len(ips) - online,
+            total=len(ips),
+            completed=len(ips),
+            scanning=False,
+            items=[entry for entry in ordered_items if entry is not None],
         )
-        write_json(RESULTS_PATH, payload.model_dump())
+        await update_results_state(final_payload)
         logger.info(
             "Scan complete | range=%s duration=%sms online=%s offline=%s",
             cfg.ip_range,
-            payload.duration_ms,
+            final_payload.duration_ms,
             online,
-            offline,
+            len(ips) - online,
         )
-        return payload
+        return final_payload
 
 
 async def auto_scan_loop() -> None:
@@ -323,12 +391,10 @@ async def update_config(payload: ConfigModel) -> dict[str, Any]:
 
 @app.post("/api/scan")
 async def trigger_scan() -> dict[str, Any]:
-    global results_state
     try:
-        results_state = await run_scan()
+        return (await run_scan()).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return results_state.model_dump()
 
 
 @app.get("/api/results")

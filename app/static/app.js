@@ -9,6 +9,7 @@ const summary = document.getElementById('summary');
 
 let allItems = [];
 let autoRefreshTimer = null;
+let livePollTimer = null;
 
 function formatDate(iso) {
   if (!iso) return '-';
@@ -37,6 +38,18 @@ function renderTable(items) {
     .join('');
 }
 
+function updateSummary(payload) {
+  const online = payload.online || 0;
+  const total = payload.total || 0;
+  const completed = payload.completed || 0;
+
+  if (payload.scanning) {
+    summary.textContent = `Escaneando... ${completed}/${total} | Online: ${online}`;
+  } else {
+    summary.textContent = `Online: ${online} / Total: ${total}`;
+  }
+}
+
 async function fetchConfig() {
   const res = await fetch('/api/config');
   const config = await res.json();
@@ -50,8 +63,28 @@ async function fetchResults() {
   const res = await fetch('/api/results');
   const payload = await res.json();
   allItems = payload.items || [];
-  summary.textContent = `Online: ${payload.online || 0} / Total: ${payload.total || 0}`;
+  updateSummary(payload);
   renderTable(allItems);
+  return payload;
+}
+
+function startLivePolling() {
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+  }
+
+  livePollTimer = setInterval(async () => {
+    try {
+      const payload = await fetchResults();
+      if (!payload.scanning) {
+        clearInterval(livePollTimer);
+        livePollTimer = null;
+      }
+    } catch (_err) {
+      // no-op para no romper el loop visual
+    }
+  }, 700);
 }
 
 async function saveConfig() {
@@ -78,6 +111,8 @@ async function saveConfig() {
 async function runScan() {
   scanNowBtn.disabled = true;
   scanNowBtn.textContent = 'Escaneando...';
+  startLivePolling();
+
   try {
     const res = await fetch('/api/scan', { method: 'POST' });
     if (!res.ok) {
@@ -86,9 +121,13 @@ async function runScan() {
     }
     const payload = await res.json();
     allItems = payload.items || [];
-    summary.textContent = `Online: ${payload.online || 0} / Total: ${payload.total || 0}`;
+    updateSummary(payload);
     renderTable(allItems);
   } finally {
+    if (livePollTimer) {
+      clearInterval(livePollTimer);
+      livePollTimer = null;
+    }
     scanNowBtn.disabled = false;
     scanNowBtn.textContent = 'Escanear ahora';
   }
