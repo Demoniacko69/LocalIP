@@ -1,0 +1,19 @@
+services:
+  ip-scanner-dashboard:
+    build: .
+    container_name: ip-scanner-dashboard
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - TIMEOUT_MS=500
+      - CONCURRENCY=50
+      - DEFAULT_RANGE=192.168.1.0/24
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
