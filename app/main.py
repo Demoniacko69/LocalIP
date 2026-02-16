@@ -34,6 +34,7 @@ class ConfigModel(BaseModel):
     ip_range: str = Field(..., min_length=7, max_length=64)
     auto_scan_enabled: bool = False
     auto_scan_interval_seconds: int = Field(default=60, ge=5, le=3600)
+    device_names: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("ip_range")
     @classmethod
@@ -41,9 +42,21 @@ class ConfigModel(BaseModel):
         parse_ip_range(value)
         return value
 
+    @field_validator("device_names")
+    @classmethod
+    def validate_device_names(cls, value: dict[str, str]) -> dict[str, str]:
+        cleaned: dict[str, str] = {}
+        for ip, name in value.items():
+            ipaddress.ip_address(ip)
+            if len(name) > 64:
+                raise ValueError("Manual device name too long")
+            cleaned[ip] = name.strip()
+        return cleaned
+
 
 class ScanResult(BaseModel):
     hostname: str
+    manual_name: str = ""
     ip: str
     status: str
     latency_ms: float | None
@@ -59,6 +72,18 @@ class ResultsPayload(BaseModel):
     completed: int
     scanning: bool
     items: list[ScanResult]
+
+
+class DeviceNamePayload(BaseModel):
+    ip: str
+    name: str = Field(default="", max_length=64)
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        ipaddress.ip_address(value)
+        return value
+
 
 
 def parse_ip_range(value: str) -> list[str]:
@@ -127,13 +152,19 @@ def load_config() -> ConfigModel:
             "ip_range": DEFAULT_RANGE,
             "auto_scan_enabled": False,
             "auto_scan_interval_seconds": 60,
+            "device_names": {},
         },
     )
     try:
         cfg = ConfigModel(**payload)
     except Exception:
         logger.warning("Config invalid, reverting to defaults")
-        cfg = ConfigModel(ip_range=DEFAULT_RANGE, auto_scan_enabled=False, auto_scan_interval_seconds=60)
+        cfg = ConfigModel(
+            ip_range=DEFAULT_RANGE,
+            auto_scan_enabled=False,
+            auto_scan_interval_seconds=60,
+            device_names={},
+        )
     write_json(CONFIG_PATH, cfg.model_dump())
     return cfg
 
@@ -253,14 +284,17 @@ async def scan_ip(ip: str, semaphore: asyncio.Semaphore, timeout_ms: int) -> Sca
                 latency = await tcp_probe(ip, timeout_ms)
             status = "Online" if latency is not None else "Offline"
             hostname = await resolve_hostname(ip) if status == "Online" else ""
+            manual_name = config_state.device_names.get(ip, "")
         except Exception as exc:
             logger.warning("Scan failed for %s: %s", ip, exc)
             latency = None
             status = "Offline"
             hostname = ""
+            manual_name = config_state.device_names.get(ip, "")
 
         return ScanResult(
             hostname=hostname,
+            manual_name=manual_name,
             ip=ip,
             status=status,
             latency_ms=latency,
@@ -395,6 +429,40 @@ async def trigger_scan() -> dict[str, Any]:
         return (await run_scan()).model_dump()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/device-name")
+async def set_device_name(payload: DeviceNamePayload) -> dict[str, Any]:
+    global config_state, results_state
+
+    name = payload.name.strip()
+    async with config_lock:
+        updated_names = dict(config_state.device_names)
+        if name:
+            updated_names[payload.ip] = name
+        else:
+            updated_names.pop(payload.ip, None)
+
+        config_state = ConfigModel(
+            ip_range=config_state.ip_range,
+            auto_scan_enabled=config_state.auto_scan_enabled,
+            auto_scan_interval_seconds=config_state.auto_scan_interval_seconds,
+            device_names=updated_names,
+        )
+        write_json(CONFIG_PATH, config_state.model_dump())
+
+    async with results_lock:
+        updated_items = []
+        for item in results_state.items:
+            if item.ip == payload.ip:
+                updated_items.append(item.model_copy(update={"manual_name": name}))
+            else:
+                updated_items.append(item)
+
+        results_state = results_state.model_copy(update={"items": updated_items})
+        write_json(RESULTS_PATH, results_state.model_dump())
+
+    return {"ip": payload.ip, "name": name}
 
 
 @app.get("/api/results")

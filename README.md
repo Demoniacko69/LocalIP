@@ -13,8 +13,9 @@ Dashboard web con tema oscuro para escanear rangos de IP en LAN, visualizar esta
 - Reverse DNS (PTR) para hostname cuando responde.
 - Persistencia en volumen Docker (`/data/config.json` y `/data/results.json`).
 - Auto-scan opcional y botón “Escanear ahora”.
-- Filtro por IP/hostname.
+- Filtro por IP/hostname/nombre manual.
 - Actualización en tiempo real por IP durante el escaneo (progreso incremental en tabla y contador).
+- Nombre manual por IP editable desde la tabla, con botón para copiar hostname limpiando sufijo `.fritz.box`.
 
 ## Estructura
 
@@ -55,6 +56,7 @@ Configurables en `docker-compose.yml`:
 - `POST /api/config` → actualizar configuración.
 - `POST /api/scan` → lanzar escaneo inmediato.
 - `GET /api/results` → últimos resultados.
+- `POST /api/device-name` → guardar/limpiar nombre manual por IP.
 - `GET /health` → healthcheck.
 
 ## Persistencia

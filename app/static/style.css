@@ -101,6 +101,12 @@ select:focus {
   background: #334155;
 }
 
+.btn.tiny {
+  padding: 0.4rem 0.55rem;
+  font-size: 0.78rem;
+  background: #374151;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -108,7 +114,7 @@ select:focus {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 760px;
+  min-width: 980px;
 }
 
 th,
@@ -116,6 +122,17 @@ td {
   text-align: left;
   padding: 0.75rem;
   border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.manual-name-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.manual-name-input {
+  min-width: 180px;
 }
 
 tbody tr:nth-child(even) {
@@ -151,5 +168,14 @@ tbody tr:hover {
   .actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .manual-name-wrap {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .manual-name-input {
+    min-width: 140px;
   }
 }

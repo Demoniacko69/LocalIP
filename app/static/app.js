@@ -16,18 +16,40 @@ function formatDate(iso) {
   return new Date(iso).toLocaleTimeString();
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function cleanHostname(hostname) {
+  const value = (hostname || '').trim();
+  if (!value) return '';
+  return value.endsWith('.fritz.box') ? value.slice(0, -'.fritz.box'.length) : value;
+}
+
 function renderTable(items) {
   const filter = searchInput.value.trim().toLowerCase();
   const filtered = items.filter((item) => {
     const host = (item.hostname || '').toLowerCase();
-    return item.ip.toLowerCase().includes(filter) || host.includes(filter);
+    const manual = (item.manual_name || '').toLowerCase();
+    return item.ip.toLowerCase().includes(filter) || host.includes(filter) || manual.includes(filter);
   });
 
   resultsBody.innerHTML = filtered
     .map(
       (item) => `
       <tr>
-        <td>${item.hostname || ''}</td>
+        <td>${escapeHtml(item.hostname || '')}</td>
+        <td>
+          <div class="manual-name-wrap">
+            <input class="manual-name-input" data-ip="${item.ip}" value="${escapeHtml(item.manual_name || '')}" placeholder="Nombre manual" maxlength="64" />
+            <button class="btn tiny copy-hostname-btn" data-ip="${item.ip}" data-hostname="${escapeHtml(item.hostname || '')}" type="button">Usar hostname</button>
+          </div>
+        </td>
         <td>${item.ip}</td>
         <td><span class="badge ${item.status === 'Online' ? 'online' : 'offline'}">${item.status}</span></td>
         <td>${item.latency_ms ?? '-'}</td>
@@ -48,6 +70,26 @@ function updateSummary(payload) {
   } else {
     summary.textContent = `Online: ${online} / Total: ${total}`;
   }
+}
+
+function updateLocalManualName(ip, name) {
+  allItems = allItems.map((item) => (item.ip === ip ? { ...item, manual_name: name } : item));
+}
+
+async function saveDeviceName(ip, name) {
+  const res = await fetch('/api/device-name', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip, name }),
+  });
+
+  if (!res.ok) {
+    alert('No se pudo guardar el nombre manual');
+    return false;
+  }
+
+  updateLocalManualName(ip, name.trim());
+  return true;
 }
 
 async function fetchConfig() {
@@ -146,6 +188,37 @@ function setupAutoRefresh() {
     }, intervalMs);
   }
 }
+
+resultsBody.addEventListener('focusout', async (event) => {
+  if (!event.target.classList.contains('manual-name-input')) return;
+  const ip = event.target.dataset.ip;
+  const name = event.target.value;
+  await saveDeviceName(ip, name);
+});
+
+resultsBody.addEventListener('keydown', async (event) => {
+  if (!event.target.classList.contains('manual-name-input')) return;
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  const ip = event.target.dataset.ip;
+  const name = event.target.value;
+  await saveDeviceName(ip, name);
+  event.target.blur();
+});
+
+resultsBody.addEventListener('click', async (event) => {
+  const button = event.target.closest('.copy-hostname-btn');
+  if (!button) return;
+
+  const ip = button.dataset.ip;
+  const cleanName = cleanHostname(button.dataset.hostname || '');
+  const input = resultsBody.querySelector(`.manual-name-input[data-ip="${ip}"]`);
+  if (input) {
+    input.value = cleanName;
+  }
+  await saveDeviceName(ip, cleanName);
+  renderTable(allItems);
+});
 
 searchInput.addEventListener('input', () => renderTable(allItems));
 autoScanCheckbox.addEventListener('change', setupAutoRefresh);
